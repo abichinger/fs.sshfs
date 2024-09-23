@@ -29,8 +29,8 @@ def fs_version():
 
 def startServer(docker_client, user, pasw, port):
     sftp_container = docker_client.containers.run(
-        "sjourdan/alpine-sshd", detach=True, ports={'22/tcp': port},
-        environment={'USER': user, 'PASSWORD': pasw},
+        "lscr.io/linuxserver/openssh-server", detach=True, ports={'2222/tcp': port},
+        environment={'USER_NAME': user, 'USER_PASSWORD': pasw, "PASSWORD_ACCESS": "true"},
     )
     time.sleep(1)
     return sftp_container

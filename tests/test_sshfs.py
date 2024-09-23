@@ -45,7 +45,7 @@ class TestSSHFS(fs.test.FSTestCases, unittest.TestCase):
 
     def make_fs(self):
         self.ssh_fs = SSHFS('localhost', self.user, self.pasw, port=self.port)
-        self.test_folder = fs.path.join('/home', self.user, uuid.uuid4().hex)
+        self.test_folder = fs.path.join('/config', uuid.uuid4().hex)
         self.ssh_fs.makedir(self.test_folder, recreate=True)
         return self.ssh_fs.opendir(self.test_folder, factory=ClosingSubFS)
 
@@ -81,6 +81,9 @@ class TestSSHFS(fs.test.FSTestCases, unittest.TestCase):
     def test_upload_4(self):
         super(TestSSHFS, self).test_upload_4()
 
+    def _sftp(self):
+        return self.fs.delegate_fs()._sftp()
+
     def test_chmod(self):
         self.fs.touch("test.txt")
         remote_path = fs.path.join(self.test_folder, "test.txt")
@@ -88,14 +91,16 @@ class TestSSHFS(fs.test.FSTestCases, unittest.TestCase):
         # Initial permissions
         info = self.fs.getinfo("test.txt", ["access"])
         self.assertEqual(info.permissions.mode, 0o644)
-        st = self.fs.delegate_fs()._sftp.stat(remote_path)
+        with self._sftp() as sftp:
+            st = sftp.stat(remote_path)
         self.assertEqual(stat.S_IMODE(st.st_mode), 0o644)
 
         # Change permissions with SSHFS._chown
         self.fs.delegate_fs()._chmod(remote_path, 0o744)
         info = self.fs.getinfo("test.txt", ["access"])
         self.assertEqual(info.permissions.mode, 0o744)
-        st = self.fs.delegate_fs()._sftp.stat(remote_path)
+        with self._sftp() as sftp:
+            st = sftp.stat(remote_path)
         self.assertEqual(stat.S_IMODE(st.st_mode), 0o744)
 
         # Change permissions with SSHFS.setinfo
@@ -103,13 +108,15 @@ class TestSSHFS(fs.test.FSTestCases, unittest.TestCase):
                         {"access": {"permissions": Permissions(mode=0o600)}})
         info = self.fs.getinfo("test.txt", ["access"])
         self.assertEqual(info.permissions.mode, 0o600)
-        st = self.fs.delegate_fs()._sftp.stat(remote_path)
+        with self._sftp() as sftp:
+            st = sftp.stat(remote_path)
         self.assertEqual(stat.S_IMODE(st.st_mode), 0o600)
 
         with self.assertRaises(fs.errors.PermissionDenied):
             self.fs.delegate_fs().setinfo("/", {
                 "access": {"permissions": Permissions(mode=0o777)}
             })
+
 
     def test_chown(self):
 
@@ -118,18 +125,19 @@ class TestSSHFS(fs.test.FSTestCases, unittest.TestCase):
         info = self.fs.getinfo("test.txt", namespaces=["access"])
         gid, uid = info.get('access', 'uid'), info.get('access', 'gid')
 
-        with utils.mock.patch.object(self.fs.delegate_fs()._sftp, 'chown') as chown:
-            self.fs.setinfo("test.txt", {'access': {'uid': None}})
-            chown.assert_called_with(remote_path, uid, gid)
+        with self._sftp() as sftp:
+            with utils.mock.patch.object(sftp, 'chown') as chown:
+                self.fs.setinfo("test.txt", {'access': {'uid': None}})
+                chown.assert_called_with(remote_path, uid, gid)
 
-            self.fs.setinfo("test.txt", {'access': {'gid': None}})
-            chown.assert_called_with(remote_path, uid, gid)
+                self.fs.setinfo("test.txt", {'access': {'gid': None}})
+                chown.assert_called_with(remote_path, uid, gid)
 
-            self.fs.setinfo("test.txt", {'access': {'gid': 8000}})
-            chown.assert_called_with(remote_path, uid, 8000)
+                self.fs.setinfo("test.txt", {'access': {'gid': 8000}})
+                chown.assert_called_with(remote_path, uid, 8000)
 
-            self.fs.setinfo("test.txt", {'access': {'uid': 1001, 'gid':1002}})
-            chown.assert_called_with(remote_path, 1001, 1002)
+                self.fs.setinfo("test.txt", {'access': {'uid': 1001, 'gid':1002}})
+                chown.assert_called_with(remote_path, 1001, 1002)
 
     def test_exec_command_exception(self):
         ssh = self.fs.delegate_fs()
@@ -175,10 +183,11 @@ class TestSSHFS(fs.test.FSTestCases, unittest.TestCase):
         with self.fs.openbin("foo", "wb") as f:
             f.write(b"foobar")
 
-        self.fs.delegate_fs()._sftp.symlink(
-            fs.path.join(self.test_folder, "foo"),
-            fs.path.join(self.test_folder, "bar")
-        )
+        with self._sftp() as sftp:
+            sftp.symlink(
+                fs.path.join(self.test_folder, "foo"),
+                fs.path.join(self.test_folder, "bar")
+            )
 
         # os.symlink(self._get_real_path("foo"), self._get_real_path("bar"))
         self.assertFalse(self.fs.islink("foo"))

@@ -25,6 +25,7 @@ from ..mode import Mode
 
 from .file import SSHFile
 from .error_tools import convert_sshfs_errors
+from .pool import SFTPClientPool
 
 
 class SSHFS(FS):
@@ -145,7 +146,7 @@ class SSHFS(FS):
 
             if keepalive > 0:
                 client.get_transport().set_keepalive(keepalive)
-            self._sftp = client.open_sftp()
+            self._pool = SFTPClientPool(client)
 
         except (paramiko.ssh_exception.SSHException,            # protocol errors
                 paramiko.ssh_exception.NoValidConnectionsError,  # connexion errors
@@ -166,17 +167,21 @@ class SSHFS(FS):
             self._client.close()
             super().close()
 
+
+    def _sftp(self):
+        return self._pool.connection()
+
     def getinfo(self, path, namespaces=None):  # noqa: D102
         self.check()
         namespaces = namespaces or ()
         _path = self.validatepath(path)
 
-        with convert_sshfs_errors('getinfo', path):
-            _stat = self._sftp.stat(_path)
+        with convert_sshfs_errors('getinfo', path), self._sftp() as sftp:
+            _stat = sftp.stat(_path)
             info = self._make_raw_info(basename(_path), _stat, namespaces)
 
             if "lstat" in namespaces or "link" in namespaces:
-                _lstat = self._sftp.lstat(_path)
+                _lstat = sftp.lstat(_path)
             if "lstat" in namespaces:
                 info["lstat"] = {
                     k: getattr(_lstat, k)
@@ -185,7 +190,7 @@ class SSHFS(FS):
                 }
             if "link" in namespaces:
                 if OSFS._get_type_from_stat(_lstat) == ResourceType.symlink:
-                    target = self._sftp.readlink(_path)
+                    target = sftp.readlink(_path)
                     info["link"] = {"target": target}
                 else:
                     info["link"] = {"target": None}
@@ -210,8 +215,8 @@ class SSHFS(FS):
         if _type is not ResourceType.directory:
             raise errors.DirectoryExpected(path)
 
-        with convert_sshfs_errors('listdir', path):
-            return self._sftp.listdir(_path)
+        with convert_sshfs_errors('listdir', path), self._sftp() as sftp:
+            return sftp.listdir(_path)
 
     def scandir(self, path, namespaces=None, page=None):  # noqa: D102
         self.check()
@@ -219,11 +224,11 @@ class SSHFS(FS):
         _namespaces = namespaces or ()
         start, stop = page or (None, None)
         try:
-            with convert_sshfs_errors('scandir', path, directory=True):
+            with convert_sshfs_errors('scandir', path, directory=True), self._sftp() as sftp:
                 # We can't use listdir_iter here because it doesn't support
                 # concurrent iteration over multiple directories, which can
                 # happen during a search="depth" walk.
-                listing = self._sftp.listdir_attr(_path)
+                listing = sftp.listdir_attr(_path)
                 for _stat in itertools.islice(listing, start, stop):
                     yield Info(self._make_raw_info(_stat.filename, _stat, _namespaces))
         except errors.ResourceNotFound:
@@ -244,8 +249,8 @@ class SSHFS(FS):
             info = self.getinfo(_path)
         except errors.ResourceNotFound:
             with self._lock:
-                with convert_sshfs_errors('makedir', path):
-                    self._sftp.mkdir(_path, _permissions.mode)
+                with convert_sshfs_errors('makedir', path), self._sftp() as sftp:
+                    sftp.mkdir(_path, _permissions.mode)
         else:
             if (info.is_dir and not recreate) or info.is_file:
                 six.raise_from(errors.DirectoryExists(path), None)
@@ -259,7 +264,7 @@ class SSHFS(FS):
         _src_path = self.validatepath(src_path)
         _dst_path = self.validatepath(dst_path)
 
-        with self._lock:
+        with self._lock, self._sftp() as sftp:
             # check src exists and is a file
             src_info = self.getinfo(_src_path, namespaces=info_ns)
             if src_info.is_dir:
@@ -274,9 +279,9 @@ class SSHFS(FS):
                 if not overwrite:
                     raise errors.DestinationExists(dst_path)
                 with convert_sshfs_errors('move', dst_path):
-                    self._sftp.remove(_dst_path)
+                    sftp.remove(_dst_path)
             # rename the file through SFTP's 'RENAME'
-            self._sftp.rename(_src_path, _dst_path)
+            sftp.rename(_src_path, _dst_path)
             # preserve times if required
             if preserve_time:
                 self._utime(
@@ -329,12 +334,21 @@ class SSHFS(FS):
             elif self.isdir(_path):
                 raise errors.FileExpected(path)
             with convert_sshfs_errors('openbin', path):
-                _sftp = self._client.open_sftp()
-                handle = _sftp.open(
+                sftp = self._pool.acquire()
+                handle = sftp.open(
                     _path,
                     mode=_mode.to_platform_bin(),
                     bufsize=buffering
                 )
+
+                # release sftp client on close
+                def wrap_close(fn):
+                    def close():
+                        fn()
+                        self._pool.release(sftp)
+                    return close
+                handle.close = wrap_close(handle.close)
+
                 handle.set_pipelined(options.get("pipelined", True))
                 if options.get("prefetch", True):
                     if _mode.reading and not _mode.writing:
@@ -350,9 +364,9 @@ class SSHFS(FS):
         if self.getinfo(_path).is_dir:
             raise errors.FileExpected(path)
 
-        with convert_sshfs_errors('remove', path):
+        with convert_sshfs_errors('remove', path), self._sftp() as sftp:
             with self._lock:
-                self._sftp.remove(_path)
+                sftp.remove(_path)
 
     def removedir(self, path):  # noqa: D102
         self.check()
@@ -364,9 +378,8 @@ class SSHFS(FS):
         if not self.isempty(_path):
             raise errors.DirectoryNotEmpty(path)
 
-        with convert_sshfs_errors('removedir', path):
-            with self._lock:
-                self._sftp.rmdir(_path)
+        with convert_sshfs_errors('removedir', path), self._lock, self._sftp() as sftp:
+            sftp.rmdir(_path)
 
     def setinfo(self, path, info):  # noqa: D102
         self.check()
@@ -423,8 +436,8 @@ class SSHFS(FS):
                 raise errors.ResourceNotFound(path)
             elif self.isdir(_path):
                 raise errors.FileExpected(path)
-            with convert_sshfs_errors('download', path):
-                self._sftp.getfo(_path, file, callback=callback)
+            with convert_sshfs_errors('download', path), self._sftp() as sftp:
+                sftp.getfo(_path, file, callback=callback)
 
     def upload(self, path, file, chunk_size=None, callback=None, file_size=None, confirm=True, **options):
         """Set a file to the contents of a binary file object.
@@ -466,8 +479,8 @@ class SSHFS(FS):
                 raise errors.ResourceNotFound(path)
             elif self.isdir(_path):
                 raise errors.FileExpected(path)
-            with convert_sshfs_errors('upload', path):
-                self._sftp.putfo(
+            with convert_sshfs_errors('upload', path), self._sftp() as sftp:
+                sftp.putfo(
                     file,
                     _path,
                     file_size=file_size,
@@ -580,23 +593,27 @@ class SSHFS(FS):
     def _chmod(self, path, mode):
         """Change the *mode* of a resource.
         """
-        self._sftp.chmod(path, mode)
+        with self._sftp() as sftp:
+            sftp.chmod(path, mode)
 
     def _chown(self, path, uid, gid):
         """Change the *owner* of a resource.
         """
-        if uid is None or gid is None:
-            info = self.getinfo(path, namespaces=('access',))
-            uid = uid or info.get('access', 'uid')
-            gid = gid or info.get('access', 'gid')
-        self._sftp.chown(path, uid, gid)
+        with self._sftp() as sftp:
+            if uid is None or gid is None:
+                info = self.getinfo(path, namespaces=('access',))
+                uid = uid or info.get('access', 'uid')
+                gid = gid or info.get('access', 'gid')
+            
+            sftp.chown(path, uid, gid)
 
     def _utime(self, path, modified, accessed):
         """Set the *accessed* and *modified* times of a resource.
         """
-        if accessed is not None or modified is not None:
-            accessed = float(modified if accessed is None else accessed)
-            modified = float(accessed if modified is None else modified)
-            self._sftp.utime(path, (accessed, modified))
-        else:
-            self._sftp.utime(path, None)
+        with self._sftp() as sftp:
+            if accessed is not None or modified is not None:
+                accessed = float(modified if accessed is None else accessed)
+                modified = float(accessed if modified is None else modified)
+                sftp.utime(path, (accessed, modified))
+            else:
+                sftp.utime(path, None)
