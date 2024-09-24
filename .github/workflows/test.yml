@@ -27,7 +27,7 @@ jobs:
           #- pypy-3.7
     steps:
     - name: Checkout SSH docker container
-      run: docker pull sjourdan/alpine-sshd
+      run: docker pull linuxserver/openssh-server
     - name: Checkout code
       uses: actions/checkout@v3
     - name: Setup Python ${{ matrix.python-version }}
