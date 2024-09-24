@@ -7,16 +7,15 @@ from paramiko import SSHClient, SFTPClient
 _local = local()
 
 class ConnectionPool(object):
+    """A generic connection pool.
+
+    Arguments:
+        open_func (Callable): Function that opens a new connection.
+        max_connections (int): Maximum number of open connections
+        timeout (float): Maximum time to wait for a connection
+    """
 
     def __init__(self, open_func, max_connections=4, timeout=None):
-        """
-        A generic connection pool.
-
-        :param open_func: Function that opens a new connection.
-        :param max_connections: Maximum number of open connections
-        :param timeout: Maximum time to wait for a connection
-        """
-
         self._open_func = open_func
         self.timeout = timeout
 
@@ -49,16 +48,18 @@ class ConnectionPool(object):
         self._q.put(conn, block=False)
 
 class SFTPClientPool(ConnectionPool):
+    """A pool of SFTPClient sessions
 
-    def __init__(self, client:SSHClient, max_connections:int=4, timeout=None):
-        """
-        A pool of SFTPClient sessions
+    Arguments:
+        client (SSHClient): ssh client
+        max_connections (int): Maximum number of open sessions
+        timeout (float): Maximum time to wait for a session
+    """
 
-        :param max_connections: Maximum number of open sessions
-        :param timeout: Maximum time to wait for a session
-        """
-
-        def open_sftp(conn: SFTPClient | None):
+    def __init__(self, client, max_connections=4, timeout=None):
+        # type: (SSHClient, int, float | None) -> SFTPClientPool
+        def open_sftp(conn):
+            # type: (SFTPClient | None) -> SFTPClient
             if conn is None or conn.get_channel().closed:
                 return client.open_sftp()
             return conn
@@ -66,6 +67,7 @@ class SFTPClientPool(ConnectionPool):
         super().__init__(open_sftp, max_connections, timeout)
 
     def acquire(self) -> SFTPClient:
+        # type: () -> SFTPClient
         """
         Acquire an SFTPClient.
         If timeout is None this functions blocks until a free session is available.

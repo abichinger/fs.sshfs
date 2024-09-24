@@ -61,7 +61,7 @@ class SSHFS(FS):
             `paramiko.AutoAddPolicy` instance.
         max_connections (int): Maximum number of concurrent SFTPClient sessions
             (defaults to 4)
-        conn_timeout (int): The maximum time to wait for a free session. 
+        conn_timeout (float): The maximum time to wait for a free session. 
             Defaults to the value of ``timeout``.
 
     Raises:
