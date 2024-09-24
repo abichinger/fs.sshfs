@@ -2,11 +2,13 @@
 from __future__ import absolute_import
 from __future__ import unicode_literals
 
+import concurrent.futures
 import stat
 import sys
 import time
 import uuid
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 
 import paramiko.ssh_exception
 
@@ -211,3 +213,18 @@ class TestSSHFS(fs.test.FSTestCases, unittest.TestCase):
         now = int(time.time())
         with utils.mock.patch("time.time", lambda: now):
             super(TestSSHFS, self).test_setinfo()
+
+    def test_thread_safty(self):
+        text = "Thread Safty Test"
+        self.fs.writetext("thread_safty.txt", text)
+
+        def getinfo():
+            return self.fs.getinfo("thread_safty.txt", namespaces=["basic", "details"])
+
+        info = getinfo()
+        self.assertEqual(len(text), info.size)
+
+        with ThreadPoolExecutor(10) as e:
+            futures = [e.submit(getinfo) for _ in range(100)]
+            for f in futures:
+                self.assertEqual(info.size, f.result().size)

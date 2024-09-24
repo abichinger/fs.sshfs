@@ -45,13 +45,14 @@ class TestOpener(unittest.TestCase):
 
     @classmethod
     def addKeyToServer(cls, pkey):
+        home = '/config'
         with paramiko.SSHClient() as client:
             client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
             client.connect('localhost', cls.port, cls.user, cls.pasw)
             with client.open_sftp() as sftp:
-                if not '.ssh' in sftp.listdir('/home/{}'.format(cls.user)):
-                    sftp.mkdir('/home/{}/.ssh'.format(cls.user))
-                with sftp.open('/home/{}/.ssh/authorized_keys'.format(cls.user), 'w') as f:
+                if '.ssh' not in sftp.listdir(home):
+                    sftp.mkdir('{}/.ssh'.format(home))
+                with sftp.open('{}/.ssh/authorized_keys'.format(home), 'w') as f:
                     f.write("{} {}\n".format(
                         pkey.get_name(), pkey.get_base64()).encode('utf-8'))
 
@@ -72,7 +73,7 @@ class TestOpener(unittest.TestCase):
         os.remove(self.config_file)
 
     def assertFunctional(self, ssh_fs):
-        test_folder = '/home/{}/{}'.format(self.user, uuid.uuid4().hex)
+        test_folder = '/config/{}'.format(uuid.uuid4().hex)
         ssh_fs.makedir(test_folder)
         with ssh_fs.opendir(test_folder) as test_fs:
 
@@ -141,7 +142,7 @@ class TestOpener(unittest.TestCase):
 
     def test_create(self):
 
-        directory = fs.path.join("home", self.user, "test", "directory")
+        directory = fs.path.join("config", "test", "directory")
         base = "ssh://{}:{}@localhost:{}".format(self.user, self.pasw, self.port)
         url = "{}/{}".format(base, directory)
 
@@ -167,20 +168,21 @@ class TestOpener(unittest.TestCase):
             self.assertTrue(ssh_fs.isfile("foo"))
 
     def test_open_symlink(self):
+        home = '/config'
         # create a symlink in the home directory
         with paramiko.SSHClient() as client:
             client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
             client.connect('localhost', self.port, self.user, self.pasw)
             with client.open_sftp() as sftp:
-                 sftp.mkdir('/home/{}/directory'.format(self.user))
+                 sftp.mkdir('{}/directory'.format(home))
                  sftp.symlink(
-                    '/home/{}/directory'.format(self.user),
-                    '/home/{}/link'.format(self.user)
+                    '{}/directory'.format(home),
+                    '{}/link'.format(home)
                 )
-                 sftp.open('/home/{}/directory/test'.format(self.user), 'w').close()
+                 sftp.open('{}/directory/test'.format(home), 'w').close()
 
         # check the symlink can be opened
-        directory = fs.path.join("home", self.user, "link")
+        directory = fs.path.join(home, "link")
         base = "ssh://{}:{}@localhost:{}".format(self.user, self.pasw, self.port)
         url = "{}/{}".format(base, directory)
         with fs.open_fs(url) as ssh_fs:
