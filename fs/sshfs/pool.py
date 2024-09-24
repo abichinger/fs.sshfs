@@ -30,19 +30,26 @@ class ConnectionPool(object):
         Returns a ContextManager with an open connection.
         This function returns the same connection when called recursively.
         '''
-        if getattr(_local, "conn", None) is None:
+        if not hasattr(_local, "conn"):
             try:
                 _local.conn = self.acquire()
                 yield _local.conn
             finally:
+                if not hasattr(_local, "conn"):
+                    # nothing has been acquired
+                    return
                 self.release(_local.conn)
-                _local.conn = None
+                del _local.conn
         else:
             yield _local.conn
 
     def acquire(self):
         conn = self._q.get(timeout=self.timeout)
-        return self._open_func(conn)
+        try:
+            return self._open_func(conn)
+        except Exception:
+            self.release(conn)
+            raise
 
     def release(self, conn):
         self._q.put(conn, block=False)
