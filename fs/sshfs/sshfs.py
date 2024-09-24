@@ -59,6 +59,10 @@ class SSHFS(FS):
         policy (paramiko.MissingHostKeyPolicy): The policy to use to resolve
             missing host keys. Defaults to ``None``, which will create a
             `paramiko.AutoAddPolicy` instance.
+        max_connections (int): Maximum number of concurrent SFTPClient sessions
+            (defaults to 4)
+        conn_timeout (int): The maximum time to wait for a free session. 
+            Defaults to the value of ``timeout``.
 
     Raises:
         fs.errors.CreateFailed: when the filesystem could not be created. The
@@ -105,6 +109,8 @@ class SSHFS(FS):
             config_path='~/.ssh/config',
             exec_timeout=None,
             policy=None,
+            max_connections=4,
+            conn_timeout=None,
             **kwargs
     ):  # noqa: D102
         super(SSHFS, self).__init__()
@@ -122,6 +128,7 @@ class SSHFS(FS):
         self._client = client = paramiko.SSHClient()
         self._timeout = timeout
         self._exec_timeout = timeout if exec_timeout is None else exec_timeout
+        self._conn_timeout = timeout if conn_timeout is None else conn_timeout
 
         _policy = paramiko.AutoAddPolicy() if policy is None else policy
 
@@ -146,7 +153,7 @@ class SSHFS(FS):
 
             if keepalive > 0:
                 client.get_transport().set_keepalive(keepalive)
-            self._pool = SFTPClientPool(client)
+            self._pool = SFTPClientPool(client, max_connections, timeout=self._conn_timeout)
 
         except (paramiko.ssh_exception.SSHException,            # protocol errors
                 paramiko.ssh_exception.NoValidConnectionsError,  # connexion errors
